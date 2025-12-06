@@ -9,13 +9,7 @@ pipeline{
     pollSCM('* * * * *')
   }
   
-  stages {
-    stage('clone from github'){
-      steps{
-        sh "echo 'cloning the latest application version' "
-        git 'https://github.com/terrybright-co/liontech-online-library-web-app.git'
-      }
-    }
+ 
     stage('3Test+Build'){
       steps{
         sh "echo 'running JUnit-test-cases' "
