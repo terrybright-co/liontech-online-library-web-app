@@ -1,63 +1,216 @@
-pipeline{
-  agent any 
-  tools {
-    maven "maven3.9.9"
-  }  
-  stages {
-    stage('clone from github'){
-      steps{
-        sh "echo 'cloning the latest application version' "
-        git 'https://github.com/terrybright-co/liontech-online-library-web-app.git'
-      }
+pipeline {
+    agent any 
+    
+    tools {
+        maven "maven3.9.9"
     }
-    stage('3Test+Build'){
-      steps{
-        sh "echo 'running JUnit-test-cases' "
-        sh "echo 'testing must passed to create artifacts ' "
-        sh "mvn clean package"
-      }
+    
+    triggers {
+        // Cron trigger for every minute - use with caution in production
+        cron('* * * * *')
     }
-    stage('4CodeQuality'){       
-      steps{
-        sh "echo 'Perfoming CodeQualityAnalysis' "
-        sh "mvn sonar:sonar"
-      }
+    
+    parameters {
+        choice(
+            name: 'DEPLOY_ENV',
+            choices: ['staging', 'production'],
+            description: 'Select deployment environment'
+        )
     }
-    stage('5uploadNexus'){
-      steps{
-        sh "mvn deploy"
-      }
-    } 
-    stage('8deploy2prod'){
-      steps{
-        deploy adapters: [tomcat9(alternativeDeploymentContext: '', credentialsId: 'e293ab7a-6c16-4fcc-9c2a-19c6c66d9e6e', path: '', url: 'http://3.97.15.34:8009/')], contextPath: 'terryb', war: 'target/*.war'
-      }
+    
+    environment {
+        // Secure credentials should be in Jenkins credentials store
+        SONAR_HOST_URL = 'http://35.183.243.95:9000'
+        NEXUS_URL = 'http://3.96.203.109:8081'
+        // Store sensitive data in credentials
+        MAVEN_SETTINGS = credentials('maven-settings')
     }
-}
-  post{
-    always{
-      emailext body: '''Hey guys
-Please check build status.
-
-Thanks
-LionTech 
-+1 437 215 2483''', recipientProviders: [buildUser(), developers()], subject: 'success', to: 'paypal-team@gmail.com'
+    
+    stages {
+        stage('Clean Workspace') {
+            steps {
+                cleanWs()
+                echo 'Cleaned workspace before starting new build'
+            }
+        }
+        
+        stage('Clone from GitHub') {
+            steps {
+                echo 'Cloning the latest application version'
+                git branch: 'main', 
+                    url: 'https://github.com/terrybright-co/liontech-online-library-web-app.git',
+                    credentialsId: 'github-credentials'  // Add GitHub credentials
+            }
+        }
+        
+        stage('Build & Test') {
+            steps {
+                echo 'Running tests and building application'
+                script {
+                    // Try to build and run tests
+                    try {
+                        sh 'mvn clean compile test-compile'
+                        
+                        // Run tests
+                        sh 'mvn test'
+                        
+                        // Generate test reports
+                        junit 'target/surefire-reports/*.xml'
+                    } catch (Exception e) {
+                        echo "Test failures detected: ${e.getMessage()}"
+                        error('Tests failed! Build cannot proceed.')
+                    }
+                }
+            }
+        }
+        
+        stage('Package Application') {
+            steps {
+                echo 'Packaging application into WAR file'
+                sh 'mvn package -DskipTests'  // Skip tests since we already ran them
+                archiveArtifacts artifacts: 'target/*.war', fingerprint: true
+            }
+        }
+        
+        stage('Code Quality Analysis') {       
+            steps {
+                echo 'Performing Code Quality Analysis with SonarQube'
+                script {
+                    withSonarQubeEnv('sonarqube') {  // Configured in Jenkins
+                        sh """
+                        mvn sonar:sonar \
+                            -Dsonar.host.url=${SONAR_HOST_URL} \
+                            -Dsonar.login=${SONarQUBE_TOKEN} \
+                            -Dsonar.projectKey=liontechbookstore \
+                            -Dsonar.projectName=liontechbookstore
+                        """
+                    }
+                }
+            }
+        }
+        
+        stage('Quality Gate Check') {
+            steps {
+                echo 'Waiting for SonarQube Quality Gate'
+                timeout(time: 1, unit: 'HOURS') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+        
+        stage('Upload to Nexus') {
+            when {
+                expression { params.DEPLOY_ENV == 'staging' || params.DEPLOY_ENV == 'production' }
+            }
+            steps {
+                echo 'Uploading artifacts to Nexus Repository'
+                script {
+                    // Use settings.xml with credentials
+                    sh "mvn deploy -s ${MAVEN_SETTINGS}"
+                }
+            }
+        } 
+        
+        stage('Deploy to Production') {
+            when {
+                expression { params.DEPLOY_ENV == 'production' }
+                branch 'main'  // Only deploy from main branch
+            }
+            steps {
+                echo 'Deploying to Tomcat Production Server'
+                script {
+                    // Deploy to Tomcat
+                    deploy adapters: [
+                        tomcat9(
+                            alternativeDeploymentContext: '', 
+                            credentialsId: 'e293ab7a-6c16-4fcc-9c2a-19c6c66d9e6e', 
+                            path: '', 
+                            url: 'http://3.97.15.34:8009/'
+                        )
+                    ], 
+                    contextPath: 'liontechbookstore',  // Changed from 'terryb' to app name
+                    war: 'target/*.war'
+                    
+                    // Health check after deployment
+                    sh """
+                    echo "Waiting for application to start..."
+                    sleep 30
+                    curl -f http://3.97.15.34:8009/liontechbookstore/ || exit 1
+                    echo "Deployment successful!"
+                    """
+                }
+            }
+        }
+        
+        stage('Deploy to Staging') {
+            when {
+                expression { params.DEPLOY_ENV == 'staging' }
+            }
+            steps {
+                echo 'Deploying to Staging Environment'
+                script {
+                    // Add staging deployment steps here
+                    echo "Staging deployment would go here"
+                }
+            }
+        }
     }
-    success{
-      emailext body: '''Hey guys
-Good job build and deployment is successful.
-
-Thanks
-LionTech 
-+1 437 215 2483''', recipientProviders: [buildUser(), developers()], subject: 'success', to: 'paypal-team@gmail.com'
-    } 
-    failure{
-      emailext body: '''Hey guys
-Build failed. Please resolve issues.
-
-Thanks
-LionTech 
-+1 437 215 2483''', recipientProviders: [buildUser(), developers()], subject: 'success', to: 'paypal-team@gmail.com'
+    
+    post {
+        always {
+            // Clean up after build
+            cleanWs()
+            
+            // Archive test results
+            junit allowEmptyResults: true, testResults: 'target/surefire-reports/*.xml'
+            archiveArtifacts artifacts: 'target/*.war', allowEmptyArchive: true
+            
+            // Send notification
+            emailext(
+                body: '''Hey Team,
+                Build: ${BUILD_NUMBER} - ${BUILD_STATUS}
+                View build: ${BUILD_URL}
+                SonarQube Report: ${env.SONAR_HOST_URL}/dashboard?id=liontechbookstore
+                
+                Thanks,
+                LionTech DevOps Team
+                +1 437 215 2483''',
+                recipientProviders: [buildUser(), developers()],
+                subject: "Build ${currentBuild.currentResult}: liontechbookstore ${env.BUILD_NUMBER}",
+                to: 'devops-team@liontech.com,paypal-team@gmail.com'  // Add proper email
+            )
+        }
+        
+        success {
+            echo 'Build and deployment successful!'
+            // Add success-specific actions here
+        } 
+        
+        failure {
+            echo 'Build failed! Check logs for details.'
+            emailext(
+                body: '''URGENT: Build Failed!
+                
+                Build: ${BUILD_NUMBER} - ${BUILD_STATUS}
+                Failed Stage: ${env.STAGE_NAME}
+                View build: ${BUILD_URL}
+                Console Output: ${BUILD_URL}console
+                
+                Please investigate immediately.
+                
+                Thanks,
+                LionTech DevOps Team''',
+                subject: "FAILURE: Build ${env.BUILD_NUMBER} Failed in ${env.STAGE_NAME}",
+                to: 'devops-alerts@liontech.com,paypal-team@gmail.com'
+            )
+        }
+        
+        unstable {
+            echo 'Build is unstable (test failures)'
+        }
+        
+        changed {
+            echo 'Build status changed from previous build'
+        }
     }
-  } 
 }
