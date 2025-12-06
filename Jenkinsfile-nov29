@@ -9,12 +9,21 @@ pipeline{
     pollSCM('* * * * *')
   }
   
- 
+  stages {
+    // REMOVE THIS STAGE - Jenkins already does this automatically
+    // stage('clone from github'){
+    //   steps{
+    //     sh "echo 'cloning the latest application version' "
+    //     git 'https://github.com/terrybright-co/liontech-online-library-web-app.git'
+    //   }
+    // }
+    
     stage('3Test+Build'){
       steps{
         sh "echo 'running JUnit-test-cases' "
         sh "echo 'testing must passed to create artifacts ' "
-        sh "mvn clean package"
+        // Add skip for problematic dependency copy
+        sh "mvn clean package -Dmaven.dependency.copydependencies.skip=true"
       }
     }
     stage('4CodeQuality'){       
@@ -41,7 +50,7 @@ Please check build status.
 
 Thanks
 LionTech 
-+1 437 215 2483''', recipientProviders: [buildUser(), developers()], subject: 'success', to: 'paypal-team@gmail.com'
++1 437 215 2483''', recipientProviders: [buildUser(), developers()], subject: 'Build Status: ${currentBuild.currentResult}', to: 'paypal-team@gmail.com'
     }
     success{
       emailext body: '''Hey guys
@@ -49,7 +58,7 @@ Good job build and deployment is successful.
 
 Thanks
 LionTech 
-+1 437 215 2483''', recipientProviders: [buildUser(), developers()], subject: 'success', to: 'paypal-team@gmail.com'
++1 437 215 2483''', recipientProviders: [buildUser(), developers()], subject: 'SUCCESS: Build ${BUILD_NUMBER}', to: 'paypal-team@gmail.com'
     } 
     failure{
       emailext body: '''Hey guys
@@ -57,7 +66,7 @@ Build failed. Please resolve issues.
 
 Thanks
 LionTech 
-+1 437 215 2483''', recipientProviders: [buildUser(), developers()], subject: 'success', to: 'paypal-team@gmail.com'
++1 437 215 2483''', recipientProviders: [buildUser(), developers()], subject: 'FAILURE: Build ${BUILD_NUMBER}', to: 'paypal-team@gmail.com'
     }
   } 
 }
